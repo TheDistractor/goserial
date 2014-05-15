@@ -37,6 +37,21 @@ type structTimeouts struct {
 	WriteTotalTimeoutConstant   uint32
 }
 
+type EscapeCommParam int
+
+const (
+	SETXOFF = EscapeCommParam(1)
+	SETXON = EscapeCommParam(2)
+	SETRTS = EscapeCommParam(3)
+	CLRRTS = EscapeCommParam(4)
+	SETDTR = EscapeCommParam(5)
+	CLRDTR = EscapeCommParam(6)
+	SETBREAK = EscapeCommParam(8)
+	CLRBREAK = EscapeCommParam(9)
+)
+
+
+
 func openPort(name string, c *Config) (rwc io.ReadWriteCloser, err error) {
 	if len(name) > 0 && name[0] != '\\' {
 		name = "\\\\.\\" + name
@@ -127,7 +142,60 @@ func (p *serialPort) Read(buf []byte) (int, error) {
 	return getOverlappedResult(p.fd, p.ro)
 }
 
+func (p *serialPort) SetDTR(flag bool) (error) {
+	if p == nil || p.f == nil {
+		return  fmt.Errorf("Invalid port on SetDTR %v %v", p, p.f)
+	}
+
+	p.rl.Lock()
+	defer p.rl.Unlock()
+
+	if flag {
+		if err := escapeCommFunction(p.fd, SETDTR); err != nil {
+			return  err
+		} else {
+			return  err
+		}
+
+	} else {
+		if err := escapeCommFunction(p.fd, CLRDTR); err != nil {
+			return  err
+		} else {
+			return  err
+		}
+	}
+
+}
+
+func (p *serialPort) SetRTS(flag bool) (error) {
+	if p == nil || p.f == nil {
+		return  fmt.Errorf("Invalid port on SetRTS %v %v", p, p.f)
+	}
+
+	p.rl.Lock()
+	defer p.rl.Unlock()
+
+	if flag {
+		if err := escapeCommFunction(p.fd, SETRTS); err != nil {
+			return  err
+		} else {
+			return  err
+		}
+
+	} else {
+		if err := escapeCommFunction(p.fd, CLRRTS); err != nil {
+			return  err
+		} else {
+			return  err
+		}
+	}
+
+}
+
+
+
 var (
+	nEscapeCommFunction,
 	nSetCommState,
 	nSetCommTimeouts,
 	nSetCommMask,
@@ -144,6 +212,7 @@ func init() {
 	}
 	defer syscall.FreeLibrary(k32)
 
+	nEscapeCommFunction = getProcAddr(k32, "EscapeCommFunction")
 	nSetCommState = getProcAddr(k32, "SetCommState")
 	nSetCommTimeouts = getProcAddr(k32, "SetCommTimeouts")
 	nSetCommMask = getProcAddr(k32, "SetCommMask")
@@ -159,6 +228,15 @@ func getProcAddr(lib syscall.Handle, name string) uintptr {
 		panic(name + " " + err.Error())
 	}
 	return addr
+}
+
+func escapeCommFunction(h syscall.Handle, flag EscapeCommParam) (error) {
+	r, _, err := syscall.Syscall(nEscapeCommFunction, 2, uintptr(h), uintptr(flag), 0)
+	if r == 0 {
+		return err
+	}
+	return nil
+
 }
 
 func setCommState(h syscall.Handle, c *Config) error {
