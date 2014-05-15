@@ -18,6 +18,7 @@ type serialPort struct {
 	wl sync.Mutex
 	ro *syscall.Overlapped
 	wo *syscall.Overlapped
+	st *structTimeouts
 }
 
 type structDCB struct {
@@ -80,13 +81,9 @@ func openPort(name string, c *Config) (rwc io.ReadWriteCloser, err error) {
 	if err = setupComm(h, 64, 64); err != nil {
 		return
 	}
-	if err = setCommTimeouts(h); err != nil {
-		return
-	}
 	if err = setCommMask(h); err != nil {
 		return
 	}
-
 	ro, err := newOverlapped()
 	if err != nil {
 		return
@@ -95,14 +92,70 @@ func openPort(name string, c *Config) (rwc io.ReadWriteCloser, err error) {
 	if err != nil {
 		return
 	}
+
 	port := new(serialPort)
 	port.f = f
 	port.fd = h
 	port.ro = ro
 	port.wo = wo
 
+
+	var timeouts structTimeouts
+	port.st = &timeouts
+	port.SetTimeouts( c.ReadTimeout )
+
+
 	return port, nil
 }
+
+
+//see github.com/doun/goserial commit b463a6314f6c1a0b8aa9e36a525ed04d7f135abb
+func (p *serialPort) SetTimeouts(msec uint32){
+
+	//mimic old behaviour
+	const MAXDWORD = 1<<32 - 1
+	offset := uint32(0)
+    divisor := uint32(10)
+
+	if msec == 0 {
+		offset = 1
+		divisor = 1
+		msec = MAXDWORD
+	}
+
+    timeouts := p.st
+	timeouts.ReadIntervalTimeout = msec/divisor
+	timeouts.ReadTotalTimeoutMultiplier = msec
+	timeouts.ReadTotalTimeoutConstant = msec - offset
+
+	/* From http://msdn.microsoft.com/en-us/library/aa363190(v=VS.85).aspx
+
+ 		 For blocking I/O see below:
+
+ 		 Remarks:
+
+ 		 If an application sets ReadIntervalTimeout and
+ 		 ReadTotalTimeoutMultiplier to MAXDWORD and sets
+ 		 ReadTotalTimeoutConstant to a value greater than zero and
+ 		 less than MAXDWORD, one of the following occurs when the
+ 		 ReadFile function is called:
+
+ 		 If there are any bytes in the input buffer, ReadFile returns
+ 		       immediately with the bytes in the buffer.
+
+ 		 If there are no bytes in the input buffer, ReadFile waits
+ 	               until a byte arrives and then returns immediately.
+
+ 		 If no bytes arrive within the time specified by
+ 		       ReadTotalTimeoutConstant, ReadFile times out.
+ 	*/
+
+    p.st = timeouts
+    setCommTimeouts(p.fd, timeouts)
+
+}
+
+
 
 func (p *serialPort) Close() error {
 	return p.f.Close()
@@ -147,9 +200,6 @@ func (p *serialPort) SetDTR(flag bool) (error) {
 		return  fmt.Errorf("Invalid port on SetDTR %v %v", p, p.f)
 	}
 
-	p.rl.Lock()
-	defer p.rl.Unlock()
-
 	if flag {
 		if err := escapeCommFunction(p.fd, SETDTR); err != nil {
 			return  err
@@ -171,9 +221,6 @@ func (p *serialPort) SetRTS(flag bool) (error) {
 	if p == nil || p.f == nil {
 		return  fmt.Errorf("Invalid port on SetRTS %v %v", p, p.f)
 	}
-
-	p.rl.Lock()
-	defer p.rl.Unlock()
 
 	if flag {
 		if err := escapeCommFunction(p.fd, SETRTS); err != nil {
@@ -244,7 +291,7 @@ func setCommState(h syscall.Handle, c *Config) error {
 	params.DCBlength = uint32(unsafe.Sizeof(params))
 
 	params.flags[0] = 0x01  // fBinary
-	params.flags[0] |= 0x10 // Assert DSR
+	//params.flags[0] |= 0x10 // Assert DSR  //do not assert DSR on connect (mimic *nix rs232)
 
 	params.BaudRate = uint32(c.Baud)
 
@@ -291,36 +338,9 @@ func setCommState(h syscall.Handle, c *Config) error {
 	return nil
 }
 
-func setCommTimeouts(h syscall.Handle) error {
-	var timeouts structTimeouts
-	const MAXDWORD = 1<<32 - 1
-	timeouts.ReadIntervalTimeout = MAXDWORD
-	timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
-	timeouts.ReadTotalTimeoutConstant = MAXDWORD - 1
-
-	/* From http://msdn.microsoft.com/en-us/library/aa363190(v=VS.85).aspx
-
-		 For blocking I/O see below:
-
-		 Remarks:
-
-		 If an application sets ReadIntervalTimeout and
-		 ReadTotalTimeoutMultiplier to MAXDWORD and sets
-		 ReadTotalTimeoutConstant to a value greater than zero and
-		 less than MAXDWORD, one of the following occurs when the
-		 ReadFile function is called:
-
-		 If there are any bytes in the input buffer, ReadFile returns
-		       immediately with the bytes in the buffer.
-
-		 If there are no bytes in the input buffer, ReadFile waits
-	               until a byte arrives and then returns immediately.
-
-		 If no bytes arrive within the time specified by
-		       ReadTotalTimeoutConstant, ReadFile times out.
-	*/
-
-	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
+//see github.com/doun/goserial commit b463a6314f6c1a0b8aa9e36a525ed04d7f135abb
+func setCommTimeouts(h syscall.Handle, timeouts *structTimeouts) error {
+	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(timeouts)), 0)
 	if r == 0 {
 		return err
 	}

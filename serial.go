@@ -118,6 +118,7 @@ type Config struct {
 
 	CRLFTranslate bool // Ignored on Windows.
 	// TimeoutStuff int
+	ReadTimeout uint32
 }
 
 func (c *Config) check() error {
